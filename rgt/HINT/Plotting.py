@@ -1,16 +1,9 @@
-import os
-import numpy as np
-import pysam
-from Bio import motifs
-from scipy.signal import savgol_filter
-from scipy.stats import scoreatpercentile
 from argparse import SUPPRESS
 import time
-import matplotlib.pyplot as plt
 from multiprocessing import Pool
 
 # Internal
-from rgt.Util import GenomeData, AuxiliaryFunctions, ErrorHandler
+from rgt.Util import ErrorHandler, HmmData
 from rgt.HINT.GenomicSignal import GenomicSignal
 from rgt.GenomicRegionSet import GenomicRegionSet
 from rgt.HINT.Util import *
@@ -31,8 +24,6 @@ def plotting_args(parser):
     parser.add_argument("--initial-clip", type=int, metavar="INT", default=50, help=SUPPRESS)
     parser.add_argument("--forward-shift", type=int, metavar="INT", default=4, help=SUPPRESS)
     parser.add_argument("--reverse-shift", type=int, metavar="INT", default=-5, help=SUPPRESS)
-    parser.add_argument("--k-nb", type=int, metavar="INT", default=6, help=SUPPRESS)
-    parser.add_argument("--y-lim", type=float, metavar="FLOAT", default=0.3, help=SUPPRESS)
 
     # Output Options
     parser.add_argument("--output-location", type=str, metavar="PATH", default=os.getcwd(),
@@ -42,14 +33,11 @@ def plotting_args(parser):
 
     # plot type
     parser.add_argument("--raw", default=False, action='store_true')
+    parser.add_argument("--bc", default=False, action='store_true')
     parser.add_argument("--strand-specific", default=False, action='store_true')
     parser.add_argument("--bias-raw-bc-line", default=False, action='store_true')
     parser.add_argument("--raw-bc-line", default=False, action='store_true')
     parser.add_argument("--bias-line", default=False, action='store_true')
-    parser.add_argument("--atac-dnase-line", default=False, action='store_true')
-    parser.add_argument("--bias-raw-bc-strand-line2", default=False, action='store_true')
-    parser.add_argument("--fragment-raw-size-line", default=False, action='store_true')
-    parser.add_argument("--fragment-bc-size-line", default=False, action='store_true')
 
     parser.add_argument('input_files', metavar='reads.bam regions.bed', type=str, nargs='*',
                         help='BAM file of reads and BED files of interesting regions')
@@ -62,20 +50,11 @@ def plotting_run(args):
         else:
             line_raw_signal(args=args)
 
-    if args.bias_raw_bc_line:
-        bias_raw_bc_strand_line(args)
-
-    if args.raw_bc_line:
-        raw_bc_line(args)
-
-    if args.bias_raw_bc_strand_line2:
-        bias_raw_bc_strand_line2(args)
-
-    if args.fragment_raw_size_line:
-        fragment_size_raw_line(args)
-
-    if args.fragment_bc_size_line:
-        fragment_size_bc_line(args)
+    if args.bc:
+        if args.strand_specific:
+            line_bc_signal_strand(args=args)
+        else:
+            line_bc_signal(args=args)
 
 
 def get_data_for_region(args):
@@ -155,30 +134,6 @@ def get_raw_signal(arguments):
     return signal
 
 
-def get_bc_signal(arguments):
-    (bam_file, regions, organism, window_size, forward_shift, reverse_shift) = arguments
-
-    genomic_signal = GenomicSignal(bam_file)
-
-    signal = np.zeros(window_size)
-    for region in regions:
-        mid = (region.final + region.initial) / 2
-        p1 = int(mid - window_size / 2)
-        p2 = int(mid + window_size / 2)
-        if p1 <= 0:
-            continue
-
-        signal += genomic_signal.get_raw_signal(chromosome=region.chrom,
-                                                start=p1,
-                                                end=p2,
-                                                forward_shift=forward_shift,
-                                                reverse_shift=reverse_shift,
-                                                strand_specific=False)
-
-    signal /= len(regions)
-    return signal
-
-
 def get_raw_signal_strand(arguments):
     (bam_file, regions, organism, window_size, forward_shift, reverse_shift) = arguments
 
@@ -201,6 +156,84 @@ def get_raw_signal_strand(arguments):
 
         signal_forward += signal_f
         signal_reverse += signal_r
+
+    signal_forward /= len(regions)
+    signal_reverse /= len(regions)
+
+    return signal_forward, signal_reverse
+
+
+def get_bc_signal(arguments):
+    (bam_file, regions, organism, window_size, forward_shift, reverse_shift,
+     chrom_sizes, genome_file_name, table_file_name_f, table_file_name_r) = arguments
+
+    fasta_file = pysam.Fastafile(genome_file_name)
+    bias_table = load_bias_table(table_file_name_f=table_file_name_f, table_file_name_r=table_file_name_r)
+
+    genomic_signal = GenomicSignal(bam_file)
+    signal = np.zeros(window_size)
+    for region in regions:
+        mid = (region.final + region.initial) // 2
+        p1 = mid - window_size // 2
+        p2 = mid + window_size // 2
+        if p1 <= 0:
+            continue
+        bc_signal = genomic_signal.get_bc_signal(chromosome=region.chrom,
+                                                 start=p1,
+                                                 end=p2,
+                                                 forward_shift=forward_shift,
+                                                 reverse_shift=reverse_shift,
+                                                 chromosome_size=chrom_sizes[region.chrom],
+                                                 fasta_file=fasta_file,
+                                                 bias_table_f=bias_table[0],
+                                                 bias_table_r=bias_table[1],
+                                                 strand_specific=False)
+
+        if bc_signal is None or np.isnan(bc_signal).any():
+            continue
+
+        signal += bc_signal
+
+    signal /= len(regions)
+
+    return signal
+
+
+def get_bc_signal_strand(arguments):
+    (bam_file, regions, organism, window_size, forward_shift, reverse_shift,
+     chrom_sizes, genome_file_name, table_file_name_f, table_file_name_r) = arguments
+
+    fasta_file = pysam.Fastafile(genome_file_name)
+    bias_table = load_bias_table(table_file_name_f=table_file_name_f, table_file_name_r=table_file_name_r)
+
+    genomic_signal = GenomicSignal(bam_file)
+    signal_forward = np.zeros(window_size)
+    signal_reverse = np.zeros(window_size)
+    for region in regions:
+        mid = (region.final + region.initial) // 2
+        p1 = mid - window_size // 2
+        p2 = mid + window_size // 2
+        if p1 <= 0:
+            continue
+        bc_signal_forward, bc_signal_reverse = genomic_signal.get_bc_signal(chromosome=region.chrom,
+                                                                            start=p1,
+                                                                            end=p2,
+                                                                            forward_shift=forward_shift,
+                                                                            reverse_shift=reverse_shift,
+                                                                            chromosome_size=chrom_sizes[region.chrom],
+                                                                            fasta_file=fasta_file,
+                                                                            bias_table_f=bias_table[0],
+                                                                            bias_table_r=bias_table[1],
+                                                                            strand_specific=True)
+
+        if bc_signal_forward is None or np.isnan(bc_signal_forward).any():
+            continue
+
+        if bc_signal_reverse is None or np.isnan(bc_signal_reverse).any():
+            continue
+
+        signal_forward += bc_signal_forward
+        signal_reverse += bc_signal_reverse
 
     signal_forward /= len(regions)
     signal_reverse /= len(regions)
@@ -278,7 +311,6 @@ def line_raw_signal_strand(args):
                 signals_reverse[i] = signal_list[i][0]
 
     print("{}: generating plot for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
-
     if args.nc == 1:
         for i, region_name in enumerate(region_name_list):
             arguments = (region_name, region_num[i], signals_forward[i], signals_reverse[i], region_pwm[i],
@@ -295,7 +327,104 @@ def line_raw_signal_strand(args):
 
 
 def line_bc_signal(args):
+    genome_data = GenomeData(args.organism)
+    genome_file_name = genome_data.get_genome()
+    chrom_sizes = get_chromosome_size(args.organism)
+
+    hmm_data = HmmData()
+    table_file_name_f = hmm_data.get_default_bias_table_F_ATAC()
+    table_file_name_r = hmm_data.get_default_bias_table_R_ATAC()
+
     bam_file, region_name_list, mpbs_regions_by_name, region_len, region_num, region_pwm = get_data_for_region(args)
+    print("{}: generating signal for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
+
+    signals = np.zeros(shape=(len(region_name_list), args.window_size), dtype=np.float32)
+    if args.nc == 1:
+        for i, region_name in enumerate(region_name_list):
+            regions = mpbs_regions_by_name[region_name]
+            arguments = (bam_file, regions, args.organism, args.window_size, args.forward_shift,
+                         args.reverse_shift, chrom_sizes, genome_file_name, table_file_name_f, table_file_name_r)
+
+            signals[i] = get_bc_signal(arguments)
+    else:
+        with Pool(processes=args.nc) as pool:
+            arguments_list = list()
+            for i, region_name in enumerate(region_name_list):
+                regions = mpbs_regions_by_name[region_name]
+                arguments_list.append([bam_file, regions, args.organism, args.window_size, args.forward_shift,
+                                       args.reverse_shift, chrom_sizes, genome_file_name,
+                                       table_file_name_f, table_file_name_r])
+
+            signal_list = pool.map(get_bc_signal, arguments_list)
+            for i, region_name in enumerate(region_name_list):
+                signals[i] = signal_list[i]
+
+    print("{}: generating plot for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
+
+    if args.nc == 1:
+        for i, region_name in enumerate(region_name_list):
+            arguments = (region_name, region_num[i], signals[i], region_pwm[i], args.output_location,
+                         args.window_size)
+            output_line_plot(arguments)
+    else:
+        with Pool(processes=args.nc) as pool:
+            arguments_list = list()
+            for i, region_name in enumerate(region_name_list):
+                arguments_list.append([region_name, region_num[i], signals[i], region_pwm[i], args.output_location,
+                                       args.window_size])
+
+            pool.map(output_line_plot, arguments_list)
+
+
+def line_bc_signal_strand(args):
+    genome_data = GenomeData(args.organism)
+    genome_file_name = genome_data.get_genome()
+    chrom_sizes = get_chromosome_size(args.organism)
+
+    hmm_data = HmmData()
+    table_file_name_f = hmm_data.get_default_bias_table_F_ATAC()
+    table_file_name_r = hmm_data.get_default_bias_table_R_ATAC()
+
+    bam_file, region_name_list, mpbs_regions_by_name, region_len, region_num, region_pwm = get_data_for_region(args)
+    print("{}: generating signal for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
+
+    signals_forward = np.zeros(shape=(len(region_name_list), args.window_size), dtype=np.float32)
+    signals_reverse = np.zeros(shape=(len(region_name_list), args.window_size), dtype=np.float32)
+    if args.nc == 1:
+        for i, region_name in enumerate(region_name_list):
+            regions = mpbs_regions_by_name[region_name]
+            arguments = (bam_file, regions, args.organism, args.window_size, args.forward_shift,
+                         args.reverse_shift, chrom_sizes, genome_file_name, table_file_name_f, table_file_name_r)
+
+            signals_forward[i], signals_reverse[i] = get_bc_signal_strand(arguments)
+    else:
+        with Pool(processes=args.nc) as pool:
+            arguments_list = list()
+            for i, region_name in enumerate(region_name_list):
+                regions = mpbs_regions_by_name[region_name]
+                arguments_list.append([bam_file, regions, args.organism, args.window_size, args.forward_shift,
+                                       args.reverse_shift, chrom_sizes, genome_file_name,
+                                       table_file_name_f, table_file_name_r])
+
+            signal_list = pool.map(get_bc_signal, arguments_list)
+            for i, region_name in enumerate(region_name_list):
+                signals_forward[i] = signal_list[i][0]
+                signals_reverse[i] = signal_list[i][0]
+
+    print("{}: generating plot for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
+    if args.nc == 1:
+        for i, region_name in enumerate(region_name_list):
+            arguments = (region_name, region_num[i], signals_forward[i], signals_reverse[i], region_pwm[i],
+                         args.output_location, args.window_size)
+            output_line_plot_strand(arguments)
+    else:
+        with Pool(processes=args.nc) as pool:
+            arguments_list = list()
+            for i, region_name in enumerate(region_name_list):
+                arguments_list.append([region_name, region_num[i], signals_forward[i], signals_reverse[i],
+                                       region_pwm[i], args.output_location, args.window_size])
+
+            pool.map(output_line_plot_strand, arguments_list)
 
 
 def bias_raw_bc_line(args):

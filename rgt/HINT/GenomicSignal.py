@@ -137,8 +137,9 @@ class GenomicSignal:
 
         return smooth_signal, slope_signal
 
-    def get_bc_signal(self, chromosome, start, end, forward_shift, reverse_shift, initial_clip=1000,
-                      fasta_file=None, bias_table=None):
+    def get_bc_signal(self, chromosome, start, end, forward_shift, reverse_shift, chromosome_size=None,
+                      fasta_file=None, bias_table_f=None, bias_table_r=None, window_size=50, default_kmer_value=1,
+                      strand_specific=False):
         """
         Gets the bias corrected signal associated with self.bam
 
@@ -150,56 +151,78 @@ class GenomicSignal:
         initial_clip: Signal will be initially clipped at this level to avoid outliers.
         :return:
         """
+        assert chromosome_size is not None, "Please provide an available chromosome size!"
         assert fasta_file is not None, "Please provide a fasta file for bias correction!"
-        assert bias_table is not None, "No bias table is available!"
-
-        raw_signal = self.get_raw_signal(chromosome=chromosome,
-                                         start=start,
-                                         end=end,
-                                         forward_shift=forward_shift,
-                                         reverse_shift=reverse_shift)
+        assert bias_table_f is not None and bias_table_r is not None, "No bias table is available!"
 
         # Parameters
-        window = 50
-        default_kmer_value = 1.0
+        k_nb = len(list(bias_table_f.keys())[0])
+        p1_w = start - window_size // 2
+        p2_w = end + window_size // 2
+        p1_wk = p1_w - k_nb // 2
+        p2_wk = p2_w + k_nb // 2
 
-        return raw_signal
+        # Skip regions which are closed to chromosome boundary
+        if p1_w <= 0 or p2_w <= 0 or p1_wk <= 0 or p2_wk <= 0:
+            return None
 
-    def get_tag_count(self, ref, start, end, downstream_ext, upstream_ext, forward_shift, reverse_shift,
-                      initial_clip=1000):
-        """
-        Gets the tag count associated with self.bam based on start, end and ext.
+        if p1_w > chromosome_size or p2_w > chromosome_size or p1_wk > chromosome_size or p2_wk > chromosome_size:
+            return None
 
-        Keyword arguments:
-        ref -- Chromosome name.
-        start -- Initial genomic coordinate of signal.
-        end -- Final genomic coordinate of signal.
-        downstream_ext -- Number of bps to extend towards the downstream region (right for forward strand and left for reverse strand).
-        upstream_ext -- Number of bps to extend towards the upstream region (left for forward strand and right for reverse strand).
-        forward_shift -- Number of bps to shift the reads aligned to the forward strand. Can be a positive number for a shift towards the downstream region (towards the inside of the aligned read) and a negative number for a shift towards the upstream region.
-        reverse_shift -- Number of bps to shift the reads aligned to the reverse strand. Can be a positive number for a shift towards the upstream region and a negative number for a shift towards the downstream region (towards the inside of the aligned read).
-        initial_clip -- Signal will be initially clipped at this level to avoid outliers.
+        raw_signal_forward = np.zeros(p2_wk - p1_wk)
+        raw_signal_reverse = np.zeros(p2_wk - p1_wk)
 
-        Return:
-        tag_count -- Total signal.
-        """
+        for read in self.bam.fetch(chromosome, start, end):
+            # check if the read is unmapped, according to issue #112
+            if read.is_unmapped:
+                continue
+            if not read.is_reverse:
+                cut_site = read.reference_start + forward_shift
+                if start <= cut_site < end:
+                    raw_signal_forward[cut_site - start] += 1.0
+            else:
+                cut_site = read.reference_end + reverse_shift - 1
+                if start <= cut_site < end:
+                    raw_signal_reverse[cut_site - start] += 1.0
 
-        # Fetch raw signal
-        pileup_region = PileupRegion(start, end, downstream_ext, upstream_ext, forward_shift, reverse_shift)
-        if ps_version == "0.7.5":
-            self.bam.fetch(reference=ref, start=start, end=end, callback=pileup_region)
+        # Fetching sequence
+        curr_seq = str(fasta_file.fetch(chromosome, p1_wk, p2_wk - 1)).upper()
+        curr_seq_rev_comp = AuxiliaryFunctions.revcomp(str(fasta_file.fetch(chromosome, p1_wk + 1, p2_wk)).upper())
+
+        # Iterating on sequence to create signal
+        bias_signal_f = []
+        bias_signal_r = []
+        for i in range(k_nb // 2, len(curr_seq) - k_nb // 2 + 1):
+            forward_seq = curr_seq[i - k_nb // 2:i + k_nb // 2]
+            reverse_seq = curr_seq_rev_comp[len(curr_seq) - k_nb // 2 - i:len(curr_seq) + k_nb // 2 - i]
+
+            if forward_seq in bias_table_f:
+                bias_signal_f.append(bias_table_f[forward_seq])
+            else:
+                bias_signal_f.append(default_kmer_value)
+
+            if reverse_seq in bias_table_r:
+                bias_signal_r.append(bias_table_r[reverse_seq])
+            else:
+                bias_signal_r.append(default_kmer_value)
+
+        # Calculating bias corrected signal
+        bc_signal_forward = []
+        bc_signal_reverse = []
+        for i in range((window_size // 2), len(bias_signal_f) - (window_size // 2)):
+            forward_raw_signal_sum = np.sum(raw_signal_forward[i - (window_size // 2): i + (window_size // 2) - 1])
+            reverse_raw_signal_sum = np.sum(raw_signal_reverse[i - (window_size // 2): i + (window_size // 2) - 1])
+            forward_bias_signal_sum = np.sum(bias_signal_f[i - (window_size // 2): i + (window_size // 2) - 1])
+            reverse_bias_signal_sum = np.sum(bias_signal_r[i - (window_size // 2): i + (window_size // 2) - 1])
+            predict_signal_forward = forward_raw_signal_sum * (bias_signal_f[i] / forward_bias_signal_sum)
+            predict_signal_reverse = reverse_raw_signal_sum * (bias_signal_r[i] / reverse_bias_signal_sum)
+            bc_signal_forward.append(predict_signal_forward)
+            bc_signal_reverse.append(predict_signal_reverse)
+
+        if strand_specific:
+            return np.array(bc_signal_forward), np.array(bc_signal_reverse)
         else:
-            iter = self.bam.fetch(reference=ref, start=start, end=end)
-            for alignment in iter: pileup_region.__call__(alignment)
-        raw_signal = array([min(e, initial_clip) for e in pileup_region.vector])
-
-        # Tag count
-        try:
-            tag_count = sum(raw_signal)
-        except Exception:
-            tag_count = 0
-
-        return tag_count
+            return np.add(bc_signal_forward, bc_signal_reverse)
 
     def get_signal(self, ref, start, end, downstream_ext, upstream_ext, forward_shift, reverse_shift,
                    initial_clip=1000, per_norm=98, per_slope=98,

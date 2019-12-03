@@ -144,11 +144,13 @@ def atac_seq(args):
             hmm_file = hmm_data.get_default_hmm_atac_single()
 
     # FIXME: make a clear-text file, like for dnase, and remove this pickle business
-    import pickle
-    with open(hmm_file, "rb") as f:
-        hmm = pickle.load(f, encoding="latin1")
-
-    hmm._compute_log_likelihood = types.MethodType(_compute_log_likelihood, hmm)
+    hmm = HMM()
+    hmm.load_hmm(input_file_name=hmm_file)
+    # import pickle
+    # with open(hmm_file, "rb") as f:
+    #     hmm = pickle.load(f, encoding="latin1")
+    #
+    # hmm._compute_log_likelihood = types.MethodType(_compute_log_likelihood, hmm)
 
     if args.bias_table:
         bias_table_list = args.bias_table.split(",")

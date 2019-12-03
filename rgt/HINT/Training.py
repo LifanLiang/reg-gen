@@ -21,6 +21,8 @@ def training_args(parser):
     parser.add_argument("--bias-table", type=str, metavar="FILE1_F,FILE1_R", default=None)
     parser.add_argument("--num-states", type=int, metavar="INT", default=7,
                         help="The states number of HMM model.")
+    parser.add_argument("--footprint-states", type=int, metavar="INT", default=6,
+                        help="The state for footprints.")
 
     parser.add_argument("--raw", action="store_true", default=False,
                         help="Train a HMM with raw signals from DNase-seq or ATAC-seq data"
