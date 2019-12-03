@@ -6,7 +6,6 @@ from rgt.GenomicRegionSet import GenomicRegionSet
 from rgt.Util import ErrorHandler
 from rgt.HINT.GenomicSignal import GenomicSignal
 from rgt.HINT.HMM import HMM
-from rgt.HINT.BiasTable import BiasTable
 from rgt.HINT.Util import *
 
 """

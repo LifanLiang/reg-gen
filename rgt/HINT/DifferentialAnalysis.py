@@ -156,7 +156,9 @@ def diff_analysis_run(args):
                     arguments = (mpbs_regions, reads_files[i], args.organism, args.window_size, args.forward_shift,
                                  args.reverse_shift, bias_table)
 
-                    signals[i, j, :] = get_bc_signal(arguments)
+                    signal = get_bc_signal(arguments)
+                    if not np.isnan(signal).any():
+                        signals[i, j, :] = get_bc_signal(arguments)
 
         # use multi-processing
         else:
@@ -251,9 +253,9 @@ def get_raw_signal(arguments):
     signal = np.zeros(window_size)
 
     for region in mpbs_region:
-        mid = (region.final + region.initial) / 2
-        p1 = mid - window_size / 2
-        p2 = mid + window_size / 2
+        mid = (region.final + region.initial) // 2
+        p1 = mid - window_size // 2
+        p2 = mid + window_size // 2
 
         if p1 <= 0:
             continue
@@ -320,7 +322,7 @@ def bias_correction(chrom, start, end, bam, bias_table, genome_file_name, forwar
     p2_wk = p2_w + int(ceil(k_nb / 2.))
     if p1 <= 0 or p1_w <= 0 or p1_wk <= 0 or p2_wk <= 0:
         # Return raw counts
-        bc_signal = np.zeros(2 - p1)
+        bc_signal = np.zeros(p2 - p1)
         for read in bam.fetch(chrom, p1, p2):
             # check if the read is unmapped, according to issue #112
             if read.is_unmapped:
@@ -413,7 +415,7 @@ def bias_correction(chrom, start, end, bam, bias_table, genome_file_name, forwar
 
 
 def get_ps_tc_results(signals, motif_len, window_size):
-    signal_half_len = window_size / 2
+    signal_half_len = window_size // 2
     nc = np.sum(signals[:, int(signal_half_len - motif_len / 2):int(signal_half_len + motif_len / 2)], axis=1)
     nr = np.sum(signals[:, int(signal_half_len + motif_len / 2):int(signal_half_len + motif_len / 2 + motif_len)],
                 axis=1)

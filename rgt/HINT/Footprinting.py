@@ -7,15 +7,13 @@ from rgt.Util import ErrorHandler, HmmData, OverlapType
 from rgt.GenomicRegion import GenomicRegion
 from rgt.GenomicRegionSet import GenomicRegionSet
 from rgt.HINT.GenomicSignal import GenomicSignal
-from rgt.HINT.HMM import HMM, _compute_log_likelihood
-from rgt.HINT.BiasTable import BiasTable
+from rgt.HINT.HMM import HMM
 from rgt.HINT.Util import *
 
 # External
 import types
 import pysam
 from hmmlearn.hmm import GaussianHMM
-import joblib
 
 # Test
 import numpy as np
@@ -154,13 +152,11 @@ def atac_seq(args):
 
     if args.bias_table:
         bias_table_list = args.bias_table.split(",")
-        bias_table = BiasTable().load_table(table_file_name_F=bias_table_list[0],
-                                            table_file_name_R=bias_table_list[1])
+        bias_table = load_bias_table(table_file_name_f=bias_table_list[0], table_file_name_r=bias_table_list[1])
     else:
-        table_F = hmm_data.get_default_bias_table_F_ATAC()
-        table_R = hmm_data.get_default_bias_table_R_ATAC()
-        bias_table = BiasTable().load_table(table_file_name_F=table_F,
-                                            table_file_name_R=table_R)
+        table_f = hmm_data.get_default_bias_table_F_ATAC()
+        table_r = hmm_data.get_default_bias_table_R_ATAC()
+        bias_table = load_bias_table(table_file_name_f=table_f, table_file_name_r=table_r)
 
     if args.initial_clip is None:
         initial_clip = 50
@@ -251,8 +247,8 @@ def atac_seq(args):
     regions.extend(int(region_total_ext / 2), int(region_total_ext / 2))  # Extending
     regions.merge()
 
-    bam = Samfile(args.input_files[0], "rb")
-    fasta = Fastafile(genome_data.get_genome())
+    bam = pysam.Samfile(args.input_files[0], "rb")
+    fasta = pysam.Fastafile(genome_data.get_genome())
 
     if args.paired_end:
         for region in original_regions:
@@ -422,17 +418,16 @@ def dnase_seq_raw(args):
     if args.bias_correction:
         if args.bias_table:
             bias_table_list = args.bias_table.split(",")
-            bias_table = BiasTable().load_table(table_file_name_F=bias_table_list[0],
-                                                table_file_name_R=bias_table_list[1])
+            bias_table = load_bias_table(table_file_name_f=bias_table_list[0], table_file_name_r=bias_table_list[1])
         else:
             if args.bias_type == 'SH':
-                table_F = hmm_data.get_default_bias_table_F_SH()
-                table_R = hmm_data.get_default_bias_table_R_SH()
-                bias_table = BiasTable().load_table(table_file_name_F=table_F, table_file_name_R=table_R)
+                table_f = hmm_data.get_default_bias_table_F_SH()
+                table_r = hmm_data.get_default_bias_table_R_SH()
+                bias_table = load_bias_table(table_file_name_f=table_f, table_file_name_r=table_r)
             elif args.bias_type == 'DH':
-                table_F = hmm_data.get_default_bias_table_F_DH()
-                table_R = hmm_data.get_default_bias_table_R_DH()
-                bias_table = BiasTable().load_table(table_file_name_F=table_F, table_file_name_R=table_R)
+                table_f = hmm_data.get_default_bias_table_F_DH()
+                table_r = hmm_data.get_default_bias_table_R_DH()
+                bias_table = load_bias_table(table_file_name_f=table_f, table_file_name_r=table_r)
 
     ###################################################################################################
     # Creating HMMs
@@ -452,10 +447,10 @@ def dnase_seq_raw(args):
         hmm_scaffold.load_hmm(hmm_file)
         scikit_hmm = GaussianHMM(n_components=hmm_scaffold.states, covariance_type="full")
         scikit_hmm._compute_log_likelihood = types.MethodType(_compute_log_likelihood, scikit_hmm)
-        scikit_hmm.startprob_ = array(hmm_scaffold.pi)
-        scikit_hmm.transmat_ = array(hmm_scaffold.A)
-        scikit_hmm.means_ = array(hmm_scaffold.means)
-        scikit_hmm.covars_ = array(hmm_scaffold.covs)
+        scikit_hmm.startprob_ = np.array(hmm_scaffold.pi)
+        scikit_hmm.transmat_ = np.array(hmm_scaffold.A)
+        scikit_hmm.means_ = np.array(hmm_scaffold.means)
+        scikit_hmm.covars_ = np.array(hmm_scaffold.covs)
     except Exception:
         err.throw_error("FP_HMM_FILES")
 
@@ -493,7 +488,7 @@ def dnase_seq_raw(args):
                                                         slope_per, bias_table, genome_data.get_genome())
 
         try:
-            input_sequence = array([dnase_norm, dnase_slope]).T
+            input_sequence = np.array([dnase_norm, dnase_slope]).T
         except Exception:
             err.throw_warning("FP_SEQ_FORMAT", add_msg="for region (" + ",".join([r.chrom, str(r.initial), str(
                 r.final)]) + "). This iteration will be skipped.")
@@ -557,17 +552,16 @@ def dnase_seq_bc(args):
     if args.bias_correction:
         if args.bias_table:
             bias_table_list = args.bias_table.split(",")
-            bias_table = BiasTable().load_table(table_file_name_F=bias_table_list[0],
-                                                table_file_name_R=bias_table_list[1])
+            bias_table = load_bias_table(table_file_name_f=bias_table_list[0], table_file_name_r=bias_table_list[1])
         else:
             if args.bias_type == 'SH':
-                table_F = hmm_data.get_default_bias_table_F_SH()
-                table_R = hmm_data.get_default_bias_table_R_SH()
-                bias_table = BiasTable().load_table(table_file_name_F=table_F, table_file_name_R=table_R)
+                table_f = hmm_data.get_default_bias_table_F_SH()
+                table_r = hmm_data.get_default_bias_table_R_SH()
+                bias_table = load_bias_table(table_file_name_f=table_f, table_file_name_r=table_r)
             elif args.bias_type == 'DH':
-                table_F = hmm_data.get_default_bias_table_F_DH()
-                table_R = hmm_data.get_default_bias_table_R_DH()
-                bias_table = BiasTable().load_table(table_file_name_F=table_F, table_file_name_R=table_R)
+                table_f = hmm_data.get_default_bias_table_F_DH()
+                table_r = hmm_data.get_default_bias_table_R_DH()
+                bias_table = load_bias_table(table_file_name_f=table_f, table_file_name_r=table_r)
 
     ###################################################################################################
     # Creating HMMs
@@ -587,10 +581,10 @@ def dnase_seq_bc(args):
         hmm_scaffold.load_hmm(hmm_file)
         scikit_hmm = GaussianHMM(n_components=hmm_scaffold.states, covariance_type="full")
         scikit_hmm._compute_log_likelihood = types.MethodType(_compute_log_likelihood, scikit_hmm)
-        scikit_hmm.startprob_ = array(hmm_scaffold.pi)
-        scikit_hmm.transmat_ = array(hmm_scaffold.A)
-        scikit_hmm.means_ = array(hmm_scaffold.means)
-        scikit_hmm.covars_ = array(hmm_scaffold.covs)
+        scikit_hmm.startprob_ = np.array(hmm_scaffold.pi)
+        scikit_hmm.transmat_ = np.array(hmm_scaffold.A)
+        scikit_hmm.means_ = np.array(hmm_scaffold.means)
+        scikit_hmm.covars_ = np.array(hmm_scaffold.covs)
     except Exception:
         err.throw_error("FP_HMM_FILES")
 
@@ -628,7 +622,7 @@ def dnase_seq_bc(args):
                                                         slope_per, bias_table, genome_data.get_genome())
 
         try:
-            input_sequence = array([dnase_norm, dnase_slope]).T
+            input_sequence = np.array([dnase_norm, dnase_slope]).T
         except Exception:
             err.throw_warning("FP_SEQ_FORMAT", add_msg="for region (" + ",".join([r.chrom, str(r.initial), str(
                 r.final)]) + "). This iteration will be skipped.")
@@ -699,10 +693,10 @@ def histone(args):
         hmm_scaffold = HMM()
         hmm_scaffold.load_hmm(hmm_file)
         scikit_hmm = GaussianHMM(n_components=hmm_scaffold.states, covariance_type="full")
-        scikit_hmm.startprob_ = array(hmm_scaffold.pi)
-        scikit_hmm.transmat_ = array(hmm_scaffold.A)
-        scikit_hmm.means_ = array(hmm_scaffold.means)
-        scikit_hmm.covars_ = array(hmm_scaffold.covs)
+        scikit_hmm.startprob_ = np.array(hmm_scaffold.pi)
+        scikit_hmm.transmat_ = np.array(hmm_scaffold.A)
+        scikit_hmm.means_ = np.array(hmm_scaffold.means)
+        scikit_hmm.covars_ = np.array(hmm_scaffold.covs)
         scikit_hmm._compute_log_likelihood = types.MethodType(_compute_log_likelihood, scikit_hmm)
     except Exception:
         err.throw_error("FP_HMM_FILES")
@@ -746,7 +740,7 @@ def histone(args):
                                                             genome_file_name=genome_data.get_genome())
 
         try:
-            input_sequence = array([histone_norm, histone_slope]).T
+            input_sequence = np.array([histone_norm, histone_slope]).T
         except Exception:
             err.throw_warning("FP_SEQ_FORMAT", add_msg="for region (" + ",".join([r.chrom, str(r.initial), str(
                 r.final)]) + "). This iteration will be skipped.")

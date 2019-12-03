@@ -8,7 +8,6 @@ from scipy.signal import savgol_filter
 
 # Internal
 from rgt.Util import AuxiliaryFunctions
-from rgt.HINT.pileupRegion import PileupRegion
 
 """
 Processes DNase-seq and histone modification signal for

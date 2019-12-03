@@ -131,17 +131,15 @@ def get_raw_tracks(args):
         output_f = open(output_filename, "a")
 
         for region in regions:
-            start = max(region.initial - half_extend_window, 0)
-            end = min(region.final + half_extend_window, chrom_sizes_dict[region.chrom])
             signal = genomic_signal.get_raw_signal(chromosome=region.chrom,
-                                                   start=start,
-                                                   end=end,
+                                                   start=region.initial,
+                                                   end=region.final,
                                                    forward_shift=args.forward_shift,
                                                    reverse_shift=args.reverse_shift,
                                                    initial_clip=args.initial_clip,
                                                    strand_specific=False)
 
-            output_f.write("fixedStep chrom=" + region.chrom + " start=" + str(start + 1) + " step=1\n" +
+            output_f.write("fixedStep chrom=" + region.chrom + " start=" + str(region.initial + 1) + " step=1\n" +
                            "\n".join([str(e) for e in np.nan_to_num(signal)]) + "\n")
         output_f.close()
 
