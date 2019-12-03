@@ -16,9 +16,7 @@ def plotting_args(parser):
                               "options. All default files such as genomes will be based on the chosen organism "
                               "and the data.config file."))
     parser.add_argument("--bias-table", type=str, metavar="FILE1_F,FILE1_R", default=None)
-    parser.add_argument("--window-size", type=int, metavar="INT", default=400)
-    parser.add_argument("--nc", type=int, metavar="INT", default=1,
-                        help="The number of cores. DEFAULT: 1")
+    parser.add_argument("--window-size", type=int, metavar="INT", default=200)
 
     # Hidden Options
     parser.add_argument("--initial-clip", type=int, metavar="INT", default=50, help=SUPPRESS)
@@ -93,19 +91,9 @@ def get_data_for_region(args):
         region_num.append(len(mpbs_regions_by_name[mpbs_name]))
 
     print("{}: generating pwm for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
-    if args.nc == 1:
-        for region_name in region_name_list:
-            pwm = get_pwm([args.organism, mpbs_regions_by_name[region_name], args.window_size])
-            region_pwm.append(pwm)
-    else:
-        with Pool(processes=args.nc) as pool:
-            arguments_list = list()
-            for mpbs_name in region_name_list:
-                arguments_list.append([args.organism, mpbs_regions_by_name[mpbs_name], args.window_size])
-
-            pwm_list = pool.map(get_pwm, arguments_list)
-            for i, mpbs_name in enumerate(region_name_list):
-                region_pwm.append(pwm_list[i])
+    for region_name in region_name_list:
+        pwm = get_pwm([args.organism, mpbs_regions_by_name[region_name], args.window_size])
+        region_pwm.append(pwm)
 
     return bam_file, region_name_list, mpbs_regions_by_name, region_len, region_num, region_pwm
 
@@ -247,83 +235,38 @@ def line_raw_signal(args):
     print("{}: generating signal for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
 
     signals = np.zeros(shape=(len(region_name_list), args.window_size), dtype=np.float32)
-    if args.nc == 1:
-        for i, region_name in enumerate(region_name_list):
-            regions = mpbs_regions_by_name[region_name]
-            arguments = (bam_file, regions, args.organism, args.window_size, args.forward_shift,
-                         args.reverse_shift)
+    for i, region_name in enumerate(region_name_list):
+        regions = mpbs_regions_by_name[region_name]
+        arguments = (bam_file, regions, args.organism, args.window_size, args.forward_shift,
+                     args.reverse_shift)
 
-            signals[i] = get_raw_signal(arguments)
-    else:
-        with Pool(processes=args.nc) as pool:
-            arguments_list = list()
-            for i, region_name in enumerate(region_name_list):
-                regions = mpbs_regions_by_name[region_name]
-                arguments_list.append([bam_file, regions, args.organism, args.window_size, args.forward_shift,
-                                       args.reverse_shift])
-
-            signal_list = pool.map(get_raw_signal, arguments_list)
-            for i, region_name in enumerate(region_name_list):
-                signals[i] = signal_list[i]
+        signals[i] = get_raw_signal(arguments)
 
     print("{}: generating plot for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
-
-    if args.nc == 1:
-        for i, region_name in enumerate(region_name_list):
-            arguments = (region_name, region_num[i], signals[i], region_pwm[i], args.output_location,
-                         args.window_size)
-            output_line_plot(arguments)
-    else:
-        with Pool(processes=args.nc) as pool:
-            arguments_list = list()
-            for i, region_name in enumerate(region_name_list):
-                arguments_list.append([region_name, region_num[i], signals[i], region_pwm[i], args.output_location,
-                                       args.window_size])
-
-            pool.map(output_line_plot, arguments_list)
+    for i, region_name in enumerate(region_name_list):
+        arguments = (region_name, region_num[i], signals[i], region_pwm[i], args.output_location,
+                     args.window_size)
+        output_line_plot(arguments)
 
 
 def line_raw_signal_strand(args):
     bam_file, region_name_list, mpbs_regions_by_name, region_len, region_num, region_pwm = get_data_for_region(args)
 
     print("{}: generating signal for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
-
     signals_forward = np.zeros(shape=(len(region_name_list), args.window_size), dtype=np.float32)
     signals_reverse = np.zeros(shape=(len(region_name_list), args.window_size), dtype=np.float32)
-    if args.nc == 1:
-        for i, region_name in enumerate(region_name_list):
-            regions = mpbs_regions_by_name[region_name]
-            arguments = (bam_file, regions, args.organism, args.window_size, args.forward_shift,
-                         args.reverse_shift)
+    for i, region_name in enumerate(region_name_list):
+        regions = mpbs_regions_by_name[region_name]
+        arguments = (bam_file, regions, args.organism, args.window_size, args.forward_shift,
+                     args.reverse_shift)
 
-            signals_forward[i], signals_reverse[i] = get_raw_signal_strand(arguments)
-    else:
-        with Pool(processes=args.nc) as pool:
-            arguments_list = list()
-            for i, region_name in enumerate(region_name_list):
-                regions = mpbs_regions_by_name[region_name]
-                arguments_list.append([bam_file, regions, args.organism, args.window_size, args.forward_shift,
-                                       args.reverse_shift])
-
-            signal_list = pool.map(get_raw_signal, arguments_list)
-            for i, region_name in enumerate(region_name_list):
-                signals_forward[i] = signal_list[i][0]
-                signals_reverse[i] = signal_list[i][0]
+        signals_forward[i], signals_reverse[i] = get_raw_signal_strand(arguments)
 
     print("{}: generating plot for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
-    if args.nc == 1:
-        for i, region_name in enumerate(region_name_list):
-            arguments = (region_name, region_num[i], signals_forward[i], signals_reverse[i], region_pwm[i],
-                         args.output_location, args.window_size)
-            output_line_plot_strand(arguments)
-    else:
-        with Pool(processes=args.nc) as pool:
-            arguments_list = list()
-            for i, region_name in enumerate(region_name_list):
-                arguments_list.append([region_name, region_num[i], signals_forward[i], signals_reverse[i],
-                                       region_pwm[i], args.output_location, args.window_size])
-
-            pool.map(output_line_plot_strand, arguments_list)
+    for i, region_name in enumerate(region_name_list):
+        arguments = (region_name, region_num[i], signals_forward[i], signals_reverse[i], region_pwm[i],
+                     args.output_location, args.window_size)
+        output_line_plot_strand(arguments)
 
 
 def line_bc_signal(args):
@@ -339,41 +282,18 @@ def line_bc_signal(args):
     print("{}: generating signal for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
 
     signals = np.zeros(shape=(len(region_name_list), args.window_size), dtype=np.float32)
-    if args.nc == 1:
-        for i, region_name in enumerate(region_name_list):
-            regions = mpbs_regions_by_name[region_name]
-            arguments = (bam_file, regions, args.organism, args.window_size, args.forward_shift,
-                         args.reverse_shift, chrom_sizes, genome_file_name, table_file_name_f, table_file_name_r)
+    for i, region_name in enumerate(region_name_list):
+        regions = mpbs_regions_by_name[region_name]
+        arguments = (bam_file, regions, args.organism, args.window_size, args.forward_shift,
+                     args.reverse_shift, chrom_sizes, genome_file_name, table_file_name_f, table_file_name_r)
 
-            signals[i] = get_bc_signal(arguments)
-    else:
-        with Pool(processes=args.nc) as pool:
-            arguments_list = list()
-            for i, region_name in enumerate(region_name_list):
-                regions = mpbs_regions_by_name[region_name]
-                arguments_list.append([bam_file, regions, args.organism, args.window_size, args.forward_shift,
-                                       args.reverse_shift, chrom_sizes, genome_file_name,
-                                       table_file_name_f, table_file_name_r])
-
-            signal_list = pool.map(get_bc_signal, arguments_list)
-            for i, region_name in enumerate(region_name_list):
-                signals[i] = signal_list[i]
+        signals[i] = get_bc_signal(arguments)
 
     print("{}: generating plot for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
-
-    if args.nc == 1:
-        for i, region_name in enumerate(region_name_list):
-            arguments = (region_name, region_num[i], signals[i], region_pwm[i], args.output_location,
-                         args.window_size)
-            output_line_plot(arguments)
-    else:
-        with Pool(processes=args.nc) as pool:
-            arguments_list = list()
-            for i, region_name in enumerate(region_name_list):
-                arguments_list.append([region_name, region_num[i], signals[i], region_pwm[i], args.output_location,
-                                       args.window_size])
-
-            pool.map(output_line_plot, arguments_list)
+    for i, region_name in enumerate(region_name_list):
+        arguments = (region_name, region_num[i], signals[i], region_pwm[i], args.output_location,
+                     args.window_size)
+        output_line_plot(arguments)
 
 
 def line_bc_signal_strand(args):
@@ -390,41 +310,18 @@ def line_bc_signal_strand(args):
 
     signals_forward = np.zeros(shape=(len(region_name_list), args.window_size), dtype=np.float32)
     signals_reverse = np.zeros(shape=(len(region_name_list), args.window_size), dtype=np.float32)
-    if args.nc == 1:
-        for i, region_name in enumerate(region_name_list):
-            regions = mpbs_regions_by_name[region_name]
-            arguments = (bam_file, regions, args.organism, args.window_size, args.forward_shift,
-                         args.reverse_shift, chrom_sizes, genome_file_name, table_file_name_f, table_file_name_r)
+    for i, region_name in enumerate(region_name_list):
+        regions = mpbs_regions_by_name[region_name]
+        arguments = (bam_file, regions, args.organism, args.window_size, args.forward_shift,
+                     args.reverse_shift, chrom_sizes, genome_file_name, table_file_name_f, table_file_name_r)
 
-            signals_forward[i], signals_reverse[i] = get_bc_signal_strand(arguments)
-    else:
-        with Pool(processes=args.nc) as pool:
-            arguments_list = list()
-            for i, region_name in enumerate(region_name_list):
-                regions = mpbs_regions_by_name[region_name]
-                arguments_list.append([bam_file, regions, args.organism, args.window_size, args.forward_shift,
-                                       args.reverse_shift, chrom_sizes, genome_file_name,
-                                       table_file_name_f, table_file_name_r])
-
-            signal_list = pool.map(get_bc_signal, arguments_list)
-            for i, region_name in enumerate(region_name_list):
-                signals_forward[i] = signal_list[i][0]
-                signals_reverse[i] = signal_list[i][0]
+        signals_forward[i], signals_reverse[i] = get_bc_signal_strand(arguments)
 
     print("{}: generating plot for each factor...\n".format(time.strftime("%D-%H:%M:%S")))
-    if args.nc == 1:
-        for i, region_name in enumerate(region_name_list):
-            arguments = (region_name, region_num[i], signals_forward[i], signals_reverse[i], region_pwm[i],
-                         args.output_location, args.window_size)
-            output_line_plot_strand(arguments)
-    else:
-        with Pool(processes=args.nc) as pool:
-            arguments_list = list()
-            for i, region_name in enumerate(region_name_list):
-                arguments_list.append([region_name, region_num[i], signals_forward[i], signals_reverse[i],
-                                       region_pwm[i], args.output_location, args.window_size])
-
-            pool.map(output_line_plot_strand, arguments_list)
+    for i, region_name in enumerate(region_name_list):
+        arguments = (region_name, region_num[i], signals_forward[i], signals_reverse[i], region_pwm[i],
+                     args.output_location, args.window_size)
+        output_line_plot_strand(arguments)
 
 
 def bias_raw_bc_line(args):

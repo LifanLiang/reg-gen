@@ -3,11 +3,11 @@ import numpy as np
 import pandas as pd
 import pysam
 import logomaker
-
+from scipy import stats
 import matplotlib.pyplot as plt
 
 # Internal
-from rgt.Util import AuxiliaryFunctions, GenomeData
+from rgt.Util import AuxiliaryFunctions, GenomeData, HmmData
 
 
 def get_chromosome_size(organism):
@@ -258,3 +258,7 @@ def output_line_plot_multi_conditions(arguments):
 
     output_filename = os.path.join(output_location, "{}.pdf".format(mpbs_name))
     plt.savefig(output_filename)
+
+
+def smooth(signal, window_size=10, rank=9):
+    zscore = stats.zscore(signal)

@@ -63,6 +63,8 @@ def tracks_run(args):
         get_raw_norm_tracks(args=args)
     elif args.raw_slope:
         get_raw_slope_tracks(args=args)
+    elif args.bc:
+        get_bc_tracks(args=args)
 
 
 def get_raw_tracks(args):
@@ -254,95 +256,100 @@ def get_bc_tracks(args):
     if len(args.input_files) != 2:
         err.throw_error("ME_FEW_ARG", add_msg="You must specify reads and regions file.")
 
+    bam_file, region_file = args.input_files[0], args.input_files[1]
+    # check if index exists for bam file
+    bam_index_file = "{}.bai".format(bam_file)
+    if not os.path.exists(bam_index_file):
+        pysam.index(bam_file)
+
     regions = GenomicRegionSet("Interested regions")
-    regions.read(args.input_files[1])
+    regions.read(region_file)
     regions.merge()
-
-    reads_file = GenomicSignal()
-
-    bam = pysam.Samfile(args.input_files[0], "rb")
-    genome_data = GenomeData(args.organism)
-    fasta = pysam.Fastafile(genome_data.get_genome())
+    genomic_signal = GenomicSignal(bam_file)
 
     hmm_data = HmmData()
-    if args.bias_table:
-        bias_table_list = args.bias_table.split(",")
-        bias_table = BiasTable().load_table(table_file_name_F=bias_table_list[0],
-                                            table_file_name_R=bias_table_list[1])
-    else:
-        table_F = hmm_data.get_default_bias_table_F_ATAC()
-        table_R = hmm_data.get_default_bias_table_R_ATAC()
-        bias_table = BiasTable().load_table(table_file_name_F=table_F,
-                                            table_file_name_R=table_R)
+    table_file_name_f = hmm_data.get_default_bias_table_F_ATAC()
+    table_file_name_r = hmm_data.get_default_bias_table_R_ATAC()
 
+    table_file_f, table_file_r = load_bias_table(table_file_name_f=table_file_name_f,
+                                                 table_file_name_r=table_file_name_f)
+
+    genome_data = GenomeData(args.organism)
+    genome_file_name = genome_data.get_genome()
+    fasta_file = pysam.Fastafile(genome_file_name)
+
+    chrom_sizes_dict = get_chromosome_size(args.organism)
+    half_extend_window = int(args.extend_window / 2)
+
+    print("{}: generating signal for {} regions...\n".format(time.strftime("%D-%H:%M:%S"),
+                                                             len(regions)))
     if args.strand_specific:
-        fname_forward = os.path.join(args.output_location, "{}_forward.wig".format(args.output_prefix))
-        fname_reverse = os.path.join(args.output_location, "{}_reverse.wig".format(args.output_prefix))
+        output_forward_filename = os.path.join(args.output_location, "{}_forward.wig".format(args.output_prefix))
+        output_reverse_filename = os.path.join(args.output_location, "{}_reverse.wig".format(args.output_prefix))
+        output_forward_f = open(output_forward_filename, "a")
+        output_reverse_f = open(output_reverse_filename, "a")
 
-        f_forward = open(fname_forward, "a")
-        f_reverse = open(fname_reverse, "a")
         for region in regions:
-            signal_f, signal_r = reads_file.get_bc_signal_by_fragment_length(
-                ref=region.chrom, start=region.initial, end=region.final, bam=bam, fasta=fasta, bias_table=bias_table,
-                forward_shift=args.forward_shift, reverse_shift=args.reverse_shift, min_length=None, max_length=None,
-                strand=True)
+            start = max(region.initial - half_extend_window, 0)
+            end = min(region.final + half_extend_window, chrom_sizes_dict[region.chrom])
+            signal_forward, signal_reverse = genomic_signal.get_bc_signal(chromosome=region.chrom,
+                                                                          start=start,
+                                                                          end=end,
+                                                                          forward_shift=args.forward_shift,
+                                                                          reverse_shift=args.reverse_shift,
+                                                                          fasta_file=fasta_file,
+                                                                          bias_table_f=table_file_f,
+                                                                          bias_table_r=table_file_r,
+                                                                          chromosome_size=chrom_sizes_dict[
+                                                                              region.chrom],
+                                                                          strand_specific=True)
 
-            if args.norm:
-                signal_f = reads_file.boyle_norm(signal_f)
-                perc = scoreatpercentile(signal_f, 98)
-                std = np.std(signal_f)
-                signal_f = reads_file.hon_norm_atac(signal_f, perc, std)
+            output_forward_f.write(
+                "fixedStep chrom=" + region.chrom + " start=" + str(start + 1) + " step=1\n" +
+                "\n".join([str(e) for e in np.nan_to_num(signal_forward)]) + "\n")
+            output_reverse_f.write(
+                "fixedStep chrom=" + region.chrom + " start=" + str(start + 1) + " step=1\n" +
+                "\n".join([str(e) for e in np.nan_to_num(signal_reverse)]) + "\n")
 
-                signal_r = reads_file.boyle_norm(signal_r)
-                perc = scoreatpercentile(signal_r, 98)
-                std = np.std(signal_r)
-                signal_r = reads_file.hon_norm_atac(signal_r, perc, std)
-
-            f_forward.write("fixedStep chrom=" + region.chrom + " start=" + str(region.initial + 1) + " step=1\n" +
-                            "\n".join([str(e) for e in np.nan_to_num(signal_f)]) + "\n")
-
-            f_reverse.write("fixedStep chrom=" + region.chrom + " start=" + str(region.initial + 1) + " step=1\n" +
-                            "\n".join([str(-e) for e in np.nan_to_num(signal_r)]) + "\n")
-
-        f_forward.close()
-        f_reverse.close()
+        output_forward_f.close()
+        output_reverse_f.close()
 
         if args.bigWig:
             genome_data = GenomeData(args.organism)
             chrom_sizes_file = genome_data.get_chromosome_sizes()
-
-            bw_filename = os.path.join(args.output_location, "{}_forward.bw".format(args.output_prefix))
-            os.system(" ".join(["wigToBigWig", fname_forward, chrom_sizes_file, bw_filename, "-verbose=0"]))
-            os.remove(fname_forward)
-
-            bw_filename = os.path.join(args.output_location, "{}_reverse.bw".format(args.output_prefix))
-            os.system(" ".join(["wigToBigWig", fname_reverse, chrom_sizes_file, bw_filename, "-verbose=0"]))
-            os.remove(fname_reverse)
-
+            bw_forward_filename = os.path.join(args.output_location, "{}_forward.bw".format(args.output_prefix))
+            bw_reverse_filename = os.path.join(args.output_location, "{}_reverse.bw".format(args.output_prefix))
+            os.system(
+                " ".join(["wigToBigWig", output_forward_filename, chrom_sizes_file, bw_forward_filename, "-verbose=0"]))
+            os.system(
+                " ".join(["wigToBigWig", output_reverse_filename, chrom_sizes_file, bw_reverse_filename, "-verbose=0"]))
+            os.remove(output_forward_filename)
+            os.remove(output_reverse_filename)
     else:
-        output_fname = os.path.join(args.output_location, "{}.wig".format(args.output_prefix))
-        with open(output_fname, "a") as output_f:
-            for region in regions:
-                signal = reads_file.get_bc_signal_by_fragment_length(ref=region.chrom, start=region.initial,
-                                                                     end=region.final,
-                                                                     bam=bam, fasta=fasta, bias_table=bias_table,
-                                                                     forward_shift=args.forward_shift,
-                                                                     reverse_shift=args.reverse_shift,
-                                                                     min_length=None, max_length=None, strand=False)
+        output_filename = os.path.join(args.output_location, "{}.wig".format(args.output_prefix))
+        output_f = open(output_filename, "a")
 
-                if args.norm:
-                    signal = reads_file.boyle_norm(signal)
-                    perc = scoreatpercentile(signal, 98)
-                    std = np.std(signal)
-                    signal = reads_file.hon_norm_atac(signal, perc, std)
+        for region in regions:
+            start = max(region.initial - half_extend_window, 0)
+            end = min(region.final + half_extend_window, chrom_sizes_dict[region.chrom])
+            signal = genomic_signal.get_bc_signal(chromosome=region.chrom,
+                                                  start=start,
+                                                  end=end,
+                                                  forward_shift=args.forward_shift,
+                                                  reverse_shift=args.reverse_shift,
+                                                  fasta_file=fasta_file,
+                                                  bias_table_f=table_file_f,
+                                                  bias_table_r=table_file_r,
+                                                  chromosome_size=chrom_sizes_dict[region.chrom],
+                                                  strand_specific=False)
 
-                output_f.write("fixedStep chrom=" + region.chrom + " start=" + str(region.initial + 1) + " step=1\n" +
-                               "\n".join([str(e) for e in np.nan_to_num(signal)]) + "\n")
+            output_f.write("fixedStep chrom=" + region.chrom + " start=" + str(region.initial + 1) + " step=1\n" +
+                           "\n".join([str(e) for e in np.nan_to_num(signal)]) + "\n")
         output_f.close()
 
         if args.bigWig:
             genome_data = GenomeData(args.organism)
             chrom_sizes_file = genome_data.get_chromosome_sizes()
             bw_filename = os.path.join(args.output_location, "{}.bw".format(args.output_prefix))
-            os.system(" ".join(["wigToBigWig", output_fname, chrom_sizes_file, bw_filename, "-verbose=0"]))
-            os.remove(output_fname)
+            os.system(" ".join(["wigToBigWig", output_filename, chrom_sizes_file, bw_filename, "-verbose=0"]))
+            os.remove(output_filename)

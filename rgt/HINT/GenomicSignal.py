@@ -172,18 +172,18 @@ class GenomicSignal:
         raw_signal_forward = np.zeros(p2_wk - p1_wk)
         raw_signal_reverse = np.zeros(p2_wk - p1_wk)
 
-        for read in self.bam.fetch(chromosome, start, end):
+        for read in self.bam.fetch(chromosome, p1_wk, p2_wk):
             # check if the read is unmapped, according to issue #112
             if read.is_unmapped:
                 continue
             if not read.is_reverse:
                 cut_site = read.reference_start + forward_shift
-                if start <= cut_site < end:
-                    raw_signal_forward[cut_site - start] += 1.0
+                if p1_wk <= cut_site < p2_wk:
+                    raw_signal_forward[cut_site - p1_wk] += 1.0
             else:
                 cut_site = read.reference_end + reverse_shift - 1
-                if start <= cut_site < end:
-                    raw_signal_reverse[cut_site - start] += 1.0
+                if p1_wk <= cut_site < p2_wk:
+                    raw_signal_reverse[cut_site - p1_wk] += 1.0
 
         # Fetching sequence
         curr_seq = str(fasta_file.fetch(chromosome, p1_wk, p2_wk - 1)).upper()
@@ -223,6 +223,54 @@ class GenomicSignal:
             return np.array(bc_signal_forward), np.array(bc_signal_reverse)
         else:
             return np.add(bc_signal_forward, bc_signal_reverse)
+
+    def get_bc_norm_signal(self, chromosome, start, end, forward_shift, reverse_shift, chromosome_size=None,
+                           fasta_file=None, bias_table_f=None, bias_table_r=None, window_size=50, default_kmer_value=1,
+                           strand_specific=False, norm_window=10000, per_norm=98):
+        """
+        Gets the raw signal associated with self.bam after normalization, mainly used for HMM training and inference
+
+        chromosome: Chromosome name.
+        start: Initial genomic coordinate of signal.
+        end: Final genomic coordinate of signal.
+        forward_shift: Number of bps to shift the reads aligned to the forward strand.
+        reverse_shift: Number of bps to shift the reads aligned to the reverse strand.
+        initial_clip: Signal will be initially clipped at this level to avoid outliers.
+        norm_window: Window size for within-dataset normalization, using 1-bk by default
+        per_norm: Percentile value for 'hon_norm' function of the slope signal.
+        :return:
+        """
+        half_window = int(norm_window / 2)
+        region_length = end - start
+
+        start = max(start - half_window, 0)
+        end = min(end + half_window, chromosome_size)
+
+        bc_signal = self.get_bc_signal(chromosome=chromosome,
+                                       start=start,
+                                       end=end,
+                                       forward_shift=forward_shift,
+                                       reverse_shift=reverse_shift,
+                                       chromosome_size=chromosome_size,
+                                       fasta_file=fasta_file,
+                                       bias_table_f=bias_table_f,
+                                       bias_table_r=bias_table_r)
+
+        norm_signal = np.zeros(region_length)
+        for i in range(half_window, region_length + half_window):
+            non_zero_mean = bc_signal[i - half_window:i + half_window].sum() / np.count_nonzero(
+                bc_signal[i - half_window:i + half_window])
+
+            norm_signal[i - half_window] = bc_signal[i] / non_zero_mean
+
+        prec = scoreatpercentile(norm_signal, per=per_norm)
+        std = norm_signal.std()
+        norm_signal = 1 / (1 + exp(- (norm_signal - prec) / std))
+
+        smooth_signal = savgol_filter(norm_signal, 9, 2)
+        slope_signal = savgol_filter(norm_signal, 9, 2, deriv=1)
+
+        return smooth_signal, slope_signal
 
     def get_signal(self, ref, start, end, downstream_ext, upstream_ext, forward_shift, reverse_shift,
                    initial_clip=1000, per_norm=98, per_slope=98,
