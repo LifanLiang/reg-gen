@@ -225,7 +225,7 @@ class GenomicSignal:
             return np.add(bc_signal_forward, bc_signal_reverse)
 
     def get_bc_norm_signal(self, chromosome, start, end, forward_shift, reverse_shift, chromosome_size=None,
-                           fasta_file=None, bias_table_f=None, bias_table_r=None, window_size=50, default_kmer_value=1,
+                           fasta_file=None, bias_table_f=None, bias_table_r=None,
                            strand_specific=False, norm_window=10000, per_norm=98):
         """
         Gets the raw signal associated with self.bam after normalization, mainly used for HMM training and inference

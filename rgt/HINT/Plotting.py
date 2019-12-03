@@ -1,9 +1,8 @@
 from argparse import SUPPRESS
 import time
-from multiprocessing import Pool
 
 # Internal
-from rgt.Util import ErrorHandler, HmmData
+from rgt.Util import ErrorHandler
 from rgt.HINT.GenomicSignal import GenomicSignal
 from rgt.GenomicRegionSet import GenomicRegionSet
 from rgt.HINT.Util import *

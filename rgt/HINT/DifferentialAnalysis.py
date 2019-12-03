@@ -1,6 +1,4 @@
 import time
-
-from math import ceil, floor
 from scipy.stats import zscore
 from scipy.stats import norm
 from argparse import SUPPRESS
@@ -8,8 +6,8 @@ from argparse import SUPPRESS
 from multiprocessing import Pool, cpu_count
 
 # Internal
-from rgt.Util import ErrorHandler, HmmData
 from rgt.GenomicRegionSet import GenomicRegionSet
+from rgt.HINT.GenomicSignal import GenomicSignal
 from rgt.HINT.Util import *
 
 import matplotlib.pyplot as plt
@@ -63,9 +61,6 @@ def diff_analysis_args(parser):
 
 
 def diff_analysis_run(args):
-    # Initializing Error Handler
-    err = ErrorHandler()
-
     output_location = os.path.join(args.output_location, "Lineplots")
     if not os.path.isdir(output_location):
         os.makedirs(output_location)
@@ -142,6 +137,10 @@ def diff_analysis_run(args):
     if args.bc:
         print("{}: loading bias table for bias correction...\n".format(time.strftime("%D-%H:%M:%S")))
         hmm_data = HmmData()
+        genome_data = GenomeData(args.organism)
+        genome_file_name = genome_data.get_genome()
+        chrom_sizes = get_chromosome_size(args.organism)
+
         table_forward = hmm_data.get_default_bias_table_F_ATAC()
         table_reverse = hmm_data.get_default_bias_table_R_ATAC()
         bias_table = load_bias_table(table_file_name_f=table_forward, table_file_name_r=table_reverse)
@@ -153,8 +152,8 @@ def diff_analysis_run(args):
                                                                             condition))
                 for j, mpbs_name in enumerate(mpbs_name_list):
                     mpbs_regions = mpbs_regions_by_name[mpbs_name]
-                    arguments = (mpbs_regions, reads_files[i], args.organism, args.window_size, args.forward_shift,
-                                 args.reverse_shift, bias_table)
+                    arguments = (reads_files[i], mpbs_regions, args.organism, args.window_size, args.forward_shift,
+                                 args.reverse_shift, chrom_sizes, genome_file_name, bias_table[0], bias_table[1])
 
                     signal = get_bc_signal(arguments)
                     if not np.isnan(signal).any():
@@ -169,8 +168,8 @@ def diff_analysis_run(args):
                     arguments_list = list()
                     for mpbs_name in mpbs_name_list:
                         mpbs_regions = mpbs_regions_by_name[mpbs_name]
-                        arguments = (mpbs_regions, reads_files[i], args.organism, args.window_size, args.forward_shift,
-                                     args.reverse_shift, bias_table)
+                        arguments = (reads_files[i], mpbs_regions, args.organism, args.window_size, args.forward_shift,
+                                     args.reverse_shift, chrom_sizes, genome_file_name, bias_table[0], bias_table[1])
                         arguments_list.append(arguments)
 
                     res = pool.map(get_bc_signal, arguments_list)
@@ -185,7 +184,7 @@ def diff_analysis_run(args):
                                                                             condition))
                 for j, mpbs_name in enumerate(mpbs_name_list):
                     mpbs_regions = mpbs_regions_by_name[mpbs_name]
-                    arguments = (mpbs_regions, reads_files[i], args.organism, args.window_size, args.forward_shift,
+                    arguments = (reads_files[i], mpbs_regions, args.organism, args.window_size, args.forward_shift,
                                  args.reverse_shift)
 
                     signals[i, j, :] = get_raw_signal(arguments)
@@ -199,7 +198,7 @@ def diff_analysis_run(args):
                     arguments_list = list()
                     for mpbs_name in mpbs_name_list:
                         mpbs_regions = mpbs_regions_by_name[mpbs_name]
-                        arguments = (mpbs_regions, reads_files[i], args.organism, args.window_size, args.forward_shift,
+                        arguments = (reads_files[i], mpbs_regions, args.organism, args.window_size, args.forward_shift,
                                      args.reverse_shift)
                         arguments_list.append(arguments)
 
@@ -247,171 +246,59 @@ def diff_analysis_run(args):
 
 
 def get_raw_signal(arguments):
-    (mpbs_region, reads_file, organism, window_size, forward_shift, reverse_shift) = arguments
+    (bam_file, regions, organism, window_size, forward_shift, reverse_shift) = arguments
 
-    bam = pysam.Samfile(reads_file, "rb")
+    genomic_signal = GenomicSignal(bam_file)
     signal = np.zeros(window_size)
-
-    for region in mpbs_region:
-        mid = (region.final + region.initial) // 2
-        p1 = mid - window_size // 2
-        p2 = mid + window_size // 2
-
+    for region in regions:
+        mid = (region.final + region.initial) / 2
+        p1 = int(mid - window_size / 2)
+        p2 = int(mid + window_size / 2)
         if p1 <= 0:
             continue
-        # Fetch raw signal
-        for read in bam.fetch(region.chrom, p1, p2):
-            # check if the read is unmapped, according to issue #112
-            if read.is_unmapped:
-                continue
 
-            if not read.is_reverse:
-                cut_site = read.pos + forward_shift
-                if p1 <= cut_site < p2:
-                    signal[cut_site - p1] += 1.0
-            else:
-                cut_site = read.aend + reverse_shift - 1
-                if p1 <= cut_site < p2:
-                    signal[cut_site - p1] += 1.0
+        signal += genomic_signal.get_raw_signal(chromosome=region.chrom,
+                                                start=p1,
+                                                end=p2,
+                                                forward_shift=forward_shift,
+                                                reverse_shift=reverse_shift,
+                                                strand_specific=False)
 
     return signal
 
 
 def get_bc_signal(arguments):
-    (mpbs_region, reads_file, organism, window_size, forward_shift, reverse_shift, bias_table) = arguments
+    (bam_file, regions, organism, window_size, forward_shift, reverse_shift,
+     chrom_sizes, genome_file_name, table_file_name_f, table_file_name_r) = arguments
 
-    bam = pysam.Samfile(reads_file, "rb")
-    genome_data = GenomeData(organism)
+    fasta_file = pysam.Fastafile(genome_file_name)
+    bias_table = load_bias_table(table_file_name_f=table_file_name_f, table_file_name_r=table_file_name_r)
+
+    genomic_signal = GenomicSignal(bam_file)
     signal = np.zeros(window_size)
-    # Fetch bias corrected signal
-    for region in mpbs_region:
-        mid = int((region.final + region.initial) / 2)
-        p1 = int(mid - window_size / 2)
-        p2 = int(mid + window_size / 2)
-
+    for region in regions:
+        mid = (region.final + region.initial) // 2
+        p1 = mid - window_size // 2
+        p2 = mid + window_size // 2
         if p1 <= 0:
             continue
-        # Fetch raw signal
-        _signal = bias_correction(chrom=region.chrom, start=p1, end=p2, bam=bam,
-                                  bias_table=bias_table, genome_file_name=genome_data.get_genome(),
-                                  forward_shift=forward_shift, reverse_shift=reverse_shift)
-        if len(_signal) != window_size:
+        bc_signal = genomic_signal.get_bc_signal(chromosome=region.chrom,
+                                                 start=p1,
+                                                 end=p2,
+                                                 forward_shift=forward_shift,
+                                                 reverse_shift=reverse_shift,
+                                                 chromosome_size=chrom_sizes[region.chrom],
+                                                 fasta_file=fasta_file,
+                                                 bias_table_f=bias_table[0],
+                                                 bias_table_r=bias_table[1],
+                                                 strand_specific=False)
+
+        if bc_signal is None or np.isnan(bc_signal).any():
             continue
 
-        # smooth the signal
-        signal = np.add(signal, np.array(_signal))
+        signal += bc_signal
 
     return signal
-
-
-def bias_correction(chrom, start, end, bam, bias_table, genome_file_name, forward_shift, reverse_shift):
-    # Parameters
-    window = 50
-    default_kmer_value = 1.0
-
-    # Initialization
-    fastaFile = pysam.Fastafile(genome_file_name)
-    fBiasDict = bias_table[0]
-    rBiasDict = bias_table[1]
-    k_nb = len(list(fBiasDict.keys())[0])
-    p1 = start
-    p2 = end
-    p1_w = int(p1 - (window / 2))
-    p2_w = int(p2 + (window / 2))
-    p1_wk = p1_w - int(floor(k_nb / 2.))
-    p2_wk = p2_w + int(ceil(k_nb / 2.))
-    if p1 <= 0 or p1_w <= 0 or p1_wk <= 0 or p2_wk <= 0:
-        # Return raw counts
-        bc_signal = np.zeros(p2 - p1)
-        for read in bam.fetch(chrom, p1, p2):
-            # check if the read is unmapped, according to issue #112
-            if read.is_unmapped:
-                continue
-
-            if not read.is_reverse:
-                cut_site = read.pos + forward_shift
-                if p1 <= cut_site < p2:
-                    bc_signal[cut_site - p1] += 1.0
-            else:
-                cut_site = read.aend + reverse_shift - 1
-                if p1 <= cut_site < p2:
-                    bc_signal[cut_site - p1] += 1.0
-
-        return bc_signal
-
-    # Raw counts
-    nf = np.zeros(p2_w - p1_w)
-    nr = np.zeros(p2_w - p1_w)
-    for read in bam.fetch(chrom, p1_w, p2_w):
-        # check if the read is unmapped, according to issue #112
-        if read.is_unmapped:
-            continue
-
-        if not read.is_reverse:
-            cut_site = read.pos + forward_shift
-            if p1_w <= cut_site < p2_w:
-                nf[cut_site - p1_w] += 1.0
-        else:
-            cut_site = read.aend + reverse_shift - 1
-            if p1_w <= cut_site < p2_w:
-                nr[cut_site - p1_w] += 1.0
-
-    # Smoothed counts
-    Nf = []
-    Nr = []
-    f_sum = sum(nf[:window])
-    r_sum = sum(nr[:window])
-    f_last = nf[0]
-    r_last = nr[0]
-    for i in range(int((window / 2)), len(nf) - int((window / 2))):
-        Nf.append(f_sum)
-        Nr.append(r_sum)
-        f_sum -= f_last
-        f_sum += nf[i + int((window / 2))]
-        f_last = nf[i - int((window / 2)) + 1]
-        r_sum -= r_last
-        r_sum += nr[i + int((window / 2))]
-        r_last = nr[i - int((window / 2)) + 1]
-
-    # Fetching sequence
-    currStr = str(fastaFile.fetch(chrom, p1_wk, p2_wk - 1)).upper()
-    currRevComp = AuxiliaryFunctions.revcomp(str(fastaFile.fetch(chrom, p1_wk + 1, p2_wk)).upper())
-
-    # Iterating on sequence to create signal
-    af = []
-    ar = []
-    for i in range(int(ceil(k_nb / 2.)), len(currStr) - int(floor(k_nb / 2)) + 1):
-        fseq = currStr[i - int(floor(k_nb / 2.)):i + int(ceil(k_nb / 2.))]
-        rseq = currRevComp[len(currStr) - int(ceil(k_nb / 2.)) - i:len(currStr) + int(floor(k_nb / 2.)) - i]
-        try:
-            af.append(fBiasDict[fseq])
-        except Exception:
-            af.append(default_kmer_value)
-        try:
-            ar.append(rBiasDict[rseq])
-        except Exception:
-            ar.append(default_kmer_value)
-
-    # Calculating bias and writing to wig file
-    f_sum = sum(af[:window])
-    r_sum = sum(ar[:window])
-    f_last = af[0]
-    r_last = ar[0]
-    bc_signal = []
-    for i in range(int((window / 2)), len(af) - int((window / 2))):
-        nhatf = Nf[i - int((window / 2))] * (af[i] / f_sum)
-        nhatr = Nr[i - int((window / 2))] * (ar[i] / r_sum)
-        bc_signal.append(nhatf + nhatr)
-        f_sum -= f_last
-        f_sum += af[i + int((window / 2))]
-        f_last = af[i - int((window / 2)) + 1]
-        r_sum -= r_last
-        r_sum += ar[i + int((window / 2))]
-        r_last = ar[i - int((window / 2)) + 1]
-
-    # Termination
-    fastaFile.close()
-    return bc_signal
 
 
 def get_ps_tc_results(signals, motif_len, window_size):
