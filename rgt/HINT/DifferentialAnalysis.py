@@ -6,6 +6,7 @@ from argparse import SUPPRESS
 from multiprocessing import Pool, cpu_count
 
 # Internal
+from rgt.Util import HmmData
 from rgt.GenomicRegionSet import GenomicRegionSet
 from rgt.HINT.GenomicSignal import GenomicSignal
 from rgt.HINT.Util import *
@@ -143,7 +144,6 @@ def diff_analysis_run(args):
 
         table_forward = hmm_data.get_default_bias_table_F_ATAC()
         table_reverse = hmm_data.get_default_bias_table_R_ATAC()
-        bias_table = load_bias_table(table_file_name_f=table_forward, table_file_name_r=table_reverse)
 
         # do not use multi-processing
         if args.nc == 1:
@@ -153,7 +153,7 @@ def diff_analysis_run(args):
                 for j, mpbs_name in enumerate(mpbs_name_list):
                     mpbs_regions = mpbs_regions_by_name[mpbs_name]
                     arguments = (reads_files[i], mpbs_regions, args.organism, args.window_size, args.forward_shift,
-                                 args.reverse_shift, chrom_sizes, genome_file_name, bias_table[0], bias_table[1])
+                                 args.reverse_shift, chrom_sizes, genome_file_name, table_forward, table_reverse)
 
                     signal = get_bc_signal(arguments)
                     if not np.isnan(signal).any():
@@ -169,7 +169,7 @@ def diff_analysis_run(args):
                     for mpbs_name in mpbs_name_list:
                         mpbs_regions = mpbs_regions_by_name[mpbs_name]
                         arguments = (reads_files[i], mpbs_regions, args.organism, args.window_size, args.forward_shift,
-                                     args.reverse_shift, chrom_sizes, genome_file_name, bias_table[0], bias_table[1])
+                                     args.reverse_shift, chrom_sizes, genome_file_name, table_forward, table_reverse)
                         arguments_list.append(arguments)
 
                     res = pool.map(get_bc_signal, arguments_list)
@@ -207,7 +207,7 @@ def diff_analysis_run(args):
 
     print("{}: signal generation is done!".format(time.strftime("%D-%H:%M:%S")))
 
-    # compute normalization facotr for each condition
+    # compute normalization factor for each condition
     factors = compute_factors(signals)
     output_factor(args, factors, conditions)
 
@@ -297,6 +297,8 @@ def get_bc_signal(arguments):
             continue
 
         signal += bc_signal
+
+    signal = smooth(signal)
 
     return signal
 

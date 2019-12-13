@@ -5,9 +5,10 @@ import pysam
 import logomaker
 from scipy import stats
 import matplotlib.pyplot as plt
+from math import ceil
 
 # Internal
-from rgt.Util import AuxiliaryFunctions, GenomeData, HmmData
+from rgt.Util import AuxiliaryFunctions, GenomeData
 
 
 def get_chromosome_size(organism):
@@ -260,5 +261,19 @@ def output_line_plot_multi_conditions(arguments):
     plt.savefig(output_filename)
 
 
-def smooth(signal, window_size=10, rank=9):
+def smooth(signal, window_size=5, rank=5):
+    k = len(signal)
     zscore = stats.zscore(signal)
+    order = zscore.argsort()
+    ranks = order.argsort()
+
+    signal[ranks > (k - rank)] = np.nan
+
+    smooth_signal = np.zeros(k)
+
+    for i in range(k):
+        a = max(0, i - round(window_size / 2))
+        b = min(k, ceil(i + window_size / 2))
+        smooth_signal[i] = np.nanmean(signal[a:b])
+
+    return smooth_signal
